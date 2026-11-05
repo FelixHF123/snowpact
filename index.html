@@ -3,10 +3,96 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>snowPact website</title>
+    <title>snowPact</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:ital,wght@0,600;0,700;1,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>snowpact</h1>
-    <p>SPEED (Snow imPact Element Evaluator Device</p>
+    <!-- Sign shapes for the three levels -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <symbol id="shape-off" viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" stroke-width="3"/></symbol>
+        <symbol id="shape-ok" viewBox="0 0 40 40"><circle cx="20" cy="20" r="17" fill="#2d7a45"/></symbol>
+        <symbol id="shape-warn" viewBox="0 0 40 40"><path d="M20 3 L38 35 H2 Z" fill="#e07a10" stroke="#e07a10" stroke-width="2" stroke-linejoin="round"/><rect x="18.2" y="14" width="3.6" height="11" rx="1" fill="#fff"/><circle cx="20" cy="29.5" r="2" fill="#fff"/></symbol>
+        <symbol id="shape-danger" viewBox="0 0 40 40"><path d="M13 2 H27 L38 13 V27 L27 38 H13 L2 27 V13 Z" fill="#c4261d"/><rect x="9" y="17.5" width="22" height="5" rx="1" fill="#fff"/></symbol>
+    </svg>
+
+    <header class="site-header">
+        <div class="wrap header-inner">
+            <a class="wordmark" href="/">snowPact</a>
+            <p class="header-note">Helmet impact monitor</p>
+        </div>
+    </header>
+
+    <main class="wrap">
+        <div class="top">
+            <section id="status-card" class="sign sign-off">
+                <svg class="sign-shape" aria-hidden="true"><use id="status-shape" href="#shape-off"/></svg>
+                <div class="sign-body">
+                    <h1 id="status-title">Not monitoring</h1>
+                    <p id="status-text">Connect the helmet to start.</p>
+                    <button id="btn-dismiss" class="btn-quiet" hidden>Clear alert</button>
+                </div>
+            </section>
+
+            <section class="connect">
+                <p id="conn-status" class="conn-status">Not connected</p>
+                <div class="buttons">
+                    <button id="btn-usb">Connect with USB</button>
+                    <button id="btn-ble">Connect with Bluetooth</button>
+                    <button id="btn-demo" class="btn-quiet">Run demo</button>
+                    <button id="btn-disconnect" class="btn-quiet" hidden>Disconnect</button>
+                </div>
+                <p id="browser-note" class="browser-note" hidden></p>
+            </section>
+        </div>
+
+        <dl class="numbers">
+            <div><dt>Right now</dt><dd><span id="val-now">--</span> g</dd></div>
+            <div><dt>Highest this run</dt><dd><span id="val-peak">--</span> g</dd></div>
+            <div><dt>Impacts</dt><dd id="val-count">0</dd></div>
+            <div class="axes"><dt>X, Y, Z</dt><dd><span id="val-x">--</span>, <span id="val-y">--</span>, <span id="val-z">--</span></dd></div>
+        </dl>
+
+        <section class="chart-section">
+            <h2>Force, last 10 seconds</h2>
+            <canvas id="chart" height="240"></canvas>
+            <p class="note">Dashed lines: <span class="t-warn"></span> g and <span class="t-danger"></span> g. Sitting still reads about 1 g.</p>
+            <p id="last-message" class="note" hidden></p>
+        </section>
+
+        <div class="bottom">
+            <section>
+                <div class="section-head">
+                    <h2>Impact log</h2>
+                    <button id="btn-clear" class="link">Clear log</button>
+                </div>
+                <p id="log-empty" class="note">No impacts yet.</p>
+                <div class="table-wrap">
+                    <table id="log-table" hidden>
+                        <thead><tr><th>When</th><th class="num">Peak</th><th>Level</th></tr></thead>
+                        <tbody id="log-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="key">
+                <h2>Levels</h2>
+                <ul>
+                    <li><svg class="key-shape"><use href="#shape-ok"/></svg><p><strong>Normal</strong>, under <span class="t-warn"></span> g.</p></li>
+                    <li><svg class="key-shape"><use href="#shape-warn"/></svg><p><strong>Hard impact</strong>, <span class="t-warn"></span> to <span class="t-danger"></span> g. Take a break and watch for symptoms.</p></li>
+                    <li><svg class="key-shape"><use href="#shape-danger"/></svg><p><strong>Severe impact</strong>, over <span class="t-danger"></span> g. Stop riding and get checked.</p></li>
+                </ul>
+                <p class="note">Concussion symptoms: headache, dizziness, confusion, nausea, blurry vision, memory problems, mood changes. They can take hours to appear.</p>
+            </section>
+        </div>
+    </main>
+
+    <footer class="wrap site-footer">
+        <p>A student project by Camilla, Meera, Felix and Manny. Not a medical device. If you think you have a concussion, see a doctor.</p>
+    </footer>
+
+    <script src="app.js"></script>
 </body>
 </html>
