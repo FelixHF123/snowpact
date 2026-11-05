@@ -145,7 +145,7 @@ function renderStatus() {
     if (activeAlert) {
         const when = formatTime(activeAlert.time);
         if (activeAlert.level === "danger") {
-            setStatus("danger", "Stop riding",
+            setStatus("danger", "Stop skiing",
                 `${activeAlert.peak} g hit at ${when}. High chance of concussion. ` +
                 "Tell someone and get checked before you ride again.");
         } else {
