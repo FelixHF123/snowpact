@@ -78,12 +78,39 @@ function handleLine(line) {
         showSensorMessage(line);
         return;
     }
+    // A good line has exactly 4 numbers: x, y, z and total.
+    // Anything else is a line that got cut off or mixed up.
+    if (nums.length !== 4) return;
     const x = parseFloat(nums[0]);
     const y = parseFloat(nums[1]);
     const z = parseFloat(nums[2]);
-    const g = nums.length >= 4 ? parseFloat(nums[3]) : Math.sqrt(x * x + y * y + z * z);
-    if ([x, y, z, g].some(Number.isNaN)) return;
+    const g = parseFloat(nums[3]);
+    if (!isValidReading(x, y, z, g)) return;
     addSample(x, y, z, g);
+}
+
+// Throws away garbled readings. The total has to match X, Y and Z,
+// and nothing can be bigger than the sensor can measure.
+function isValidReading(x, y, z, g) {
+    if ([x, y, z, g].some((v) => Number.isNaN(v) || Math.abs(v) > 400)) return false;
+    const expected = Math.sqrt(x * x + y * y + z * z);
+    return Math.abs(expected - g) <= 0.05 * expected + 0.1;
+}
+
+// Bluetooth readings come as one 9-byte packet:
+// byte 0 = 1, then X, Y, Z and total as 2-byte numbers in hundredths of a g.
+// Anything else is a text message from the sensor.
+function handleBluetoothPacket(view) {
+    if (view.byteLength === 9 && view.getUint8(0) === 1) {
+        const x = view.getInt16(1, true) / 100;
+        const y = view.getInt16(3, true) / 100;
+        const z = view.getInt16(5, true) / 100;
+        const g = view.getInt16(7, true) / 100;
+        if (isValidReading(x, y, z, g)) addSample(x, y, z, g);
+        return;
+    }
+    const text = new TextDecoder().decode(view).trim();
+    if (text) showSensorMessage(text);
 }
 
 function showSensorMessage(line) {
@@ -333,8 +360,7 @@ async function connectBluetooth() {
         const server = await device.gatt.connect();
         const service = await server.getPrimaryService(BLE_SERVICE);
         const tx = await service.getCharacteristic(BLE_TX_CHAR);
-        const decoder = new TextDecoder();
-        const onData = (e) => handleText(decoder.decode(e.target.value));
+        const onData = (e) => handleBluetoothPacket(e.target.value);
         tx.addEventListener("characteristicvaluechanged", onData);
         await tx.startNotifications();
 
