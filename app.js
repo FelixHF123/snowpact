@@ -9,6 +9,7 @@ const IMPACT_END_MS = 150;  // an impact ends once force stays under WARN_G this
 const CHART_SECONDS = 10;   // how much history the chart shows
 const STALE_MS = 3000;      // warn if no data arrives for this long
 const BAUD_RATE = 115200;   // must match Serial.begin() in the Arduino code
+const APP_VERSION = "4";    // shown at the bottom of the page, so you can tell when Vercel has updated
 
 // Bluetooth: "Nordic UART" service, the same UUIDs used in snowpact_ble.ino
 const BLE_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
@@ -29,6 +30,7 @@ const el = {
 
 document.querySelectorAll(".t-warn").forEach((s) => (s.textContent = WARN_G));
 document.querySelectorAll(".t-danger").forEach((s) => (s.textContent = DANGER_G));
+document.querySelectorAll(".app-version").forEach((s) => (s.textContent = APP_VERSION));
 
 // ---------- State ----------
 let connection = null;      // { type: "usb" | "ble" | "demo", close: async fn }
@@ -78,15 +80,18 @@ function handleLine(line) {
         showSensorMessage(line);
         return;
     }
-    // A good line has exactly 4 numbers: x, y, z and total.
+    // A good line has x, y, z and total, and newer sketches add the peak:
+    //   "0.05  -0.10  0.98  total: 0.99  peak: 1.62"
     // Anything else is a line that got cut off or mixed up.
-    if (nums.length !== 4) return;
+    if (nums.length !== 4 && nums.length !== 5) return;
+    if (nums.length === 5 && !line.includes("peak")) return;
     const x = parseFloat(nums[0]);
     const y = parseFloat(nums[1]);
     const z = parseFloat(nums[2]);
     const g = parseFloat(nums[3]);
-    if (!isValidReading(x, y, z, g)) return;
-    addSample(x, y, z, g);
+    const peak = nums.length === 5 ? parseFloat(nums[4]) : g;
+    if (!isValidReading(x, y, z, g) || !(peak >= 0 && peak <= 400)) return;
+    addSample(x, y, z, g, Math.max(peak, g));
 }
 
 // Throws away garbled readings. The total has to match X, Y and Z,
@@ -97,20 +102,24 @@ function isValidReading(x, y, z, g) {
     return Math.abs(expected - g) <= 0.05 * expected + 0.1;
 }
 
-// Bluetooth readings come as one 9-byte packet:
-// byte 0 = 1, then X, Y, Z and total as 2-byte numbers in hundredths of a g.
-// Anything else is a text message from the sensor.
+// Bluetooth readings come as one small packet of 2-byte numbers in hundredths of a g:
+//   11 bytes: 2, then X, Y, Z, total (averages) and peak   (current sketch)
+//    9 bytes: 1, then X, Y, Z and total                    (earlier sketch)
+// Anything else is text (a message, or an older sketch sending text lines).
+const bleDecoder = new TextDecoder();
+
 function handleBluetoothPacket(view) {
-    if (view.byteLength === 9 && view.getUint8(0) === 1) {
+    const marker = view.byteLength > 0 ? view.getUint8(0) : 0;
+    if ((view.byteLength === 11 && marker === 2) || (view.byteLength === 9 && marker === 1)) {
         const x = view.getInt16(1, true) / 100;
         const y = view.getInt16(3, true) / 100;
         const z = view.getInt16(5, true) / 100;
         const g = view.getInt16(7, true) / 100;
-        if (isValidReading(x, y, z, g)) addSample(x, y, z, g);
+        const peak = marker === 2 ? view.getInt16(9, true) / 100 : g;
+        if (isValidReading(x, y, z, g) && peak >= 0) addSample(x, y, z, g, Math.max(peak, g));
         return;
     }
-    const text = new TextDecoder().decode(view).trim();
-    if (text) showSensorMessage(text);
+    handleText(bleDecoder.decode(view));
 }
 
 function showSensorMessage(line) {
@@ -119,18 +128,21 @@ function showSensorMessage(line) {
 }
 
 // ---------- Processing samples ----------
-function addSample(x, y, z, g) {
+// g is the steady (average) force, shown as "Right now".
+// peak is the strongest single reading, used for the chart and for impacts,
+// so a short hit is never averaged away.
+function addSample(x, y, z, g, peak = g) {
     const t = performance.now();
     lastDataTime = t;
     latest = { x, y, z, g };
-    samples.push({ t, g });
-    if (g > sessionPeak) sessionPeak = g;
+    samples.push({ t, g: peak });
+    if (peak > sessionPeak) sessionPeak = peak;
 
     // Impact detection: start when force passes WARN_G, keep the highest value,
     // finish once force has stayed below WARN_G for IMPACT_END_MS.
-    if (g >= WARN_G) {
-        if (!currentImpact) currentImpact = { start: Date.now(), peak: g, lastAbove: t };
-        currentImpact.peak = Math.max(currentImpact.peak, g);
+    if (peak >= WARN_G) {
+        if (!currentImpact) currentImpact = { start: Date.now(), peak, lastAbove: t };
+        currentImpact.peak = Math.max(currentImpact.peak, peak);
         currentImpact.lastAbove = t;
     }
     needsRedraw = true;
