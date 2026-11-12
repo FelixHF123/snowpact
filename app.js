@@ -195,7 +195,7 @@ function renderStatus() {
         return;
     }
     if (!connection) {
-        setStatus("off", "Not monitoring", "Connect the helmet to start.");
+        setStatus("off", "Not monitoring", "Connect the sensor to start");
         return;
     }
     if (!latest) {
@@ -378,7 +378,7 @@ async function connectBluetooth() {
 
         let open = true;
         device.addEventListener("gattserverdisconnected", () => {
-            if (open) endConnection("Bluetooth connection lost. Is the helmet on and nearby?");
+            if (open) endConnection("Bluetooth connection lost. Check if the sensor on and nearby");
         });
         startConnection("ble", "Connected to " + (device.name || "sensor") + " over Bluetooth", async () => {
             open = false;
