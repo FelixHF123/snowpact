@@ -5,11 +5,13 @@
 // ---------- Settings (change these to match your testing) ----------
 const WARN_G = 75;          // "Hard impact" starts here (from our design requirements)
 const DANGER_G = 95;        // "Severe impact" starts here
+const MIN_HIT_MS = 4;       // a hit has to last at least this long to count. Table taps last ~1 ms,
+                            // real head impacts in a helmet last about 5-15 ms. Tune this with drop tests.
 const IMPACT_END_MS = 150;  // an impact ends once force stays under WARN_G this long
 const CHART_SECONDS = 10;   // how much history the chart shows
 const STALE_MS = 3000;      // warn if no data arrives for this long
 const BAUD_RATE = 115200;   // must match Serial.begin() in the Arduino code
-const APP_VERSION = "4";    // shown at the bottom of the page, so you can tell when Vercel has updated
+const APP_VERSION = "5";    // shown at the bottom of the page, so you can tell when Vercel has updated
 
 // Bluetooth: "Nordic UART" service, the same UUIDs used in snowpact_ble.ino
 const BLE_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
@@ -80,18 +82,22 @@ function handleLine(line) {
         showSensorMessage(line);
         return;
     }
-    // A good line has x, y, z and total, and newer sketches add the peak:
-    //   "0.05  -0.10  0.98  total: 0.99  peak: 1.62"
+    // A good line has x, y, z and total. Newer sketches add the peak and
+    // how long the longest hit lasted:
+    //   "0.05  -0.10  0.98  total: 0.99  peak: 1.62  time: 0.00"
     // Anything else is a line that got cut off or mixed up.
-    if (nums.length !== 4 && nums.length !== 5) return;
-    if (nums.length === 5 && !line.includes("peak")) return;
+    if (nums.length < 4 || nums.length > 6) return;
+    if (nums.length >= 5 && !line.includes("peak")) return;
+    if (nums.length === 6 && !line.includes("time")) return;
     const x = parseFloat(nums[0]);
     const y = parseFloat(nums[1]);
     const z = parseFloat(nums[2]);
     const g = parseFloat(nums[3]);
-    const peak = nums.length === 5 ? parseFloat(nums[4]) : g;
+    const peak = nums.length >= 5 ? parseFloat(nums[4]) : g;
+    const hitMs = nums.length === 6 ? parseFloat(nums[5]) : null;
     if (!isValidReading(x, y, z, g) || !(peak >= 0 && peak <= 400)) return;
-    addSample(x, y, z, g, Math.max(peak, g));
+    if (hitMs !== null && !(hitMs >= 0 && hitMs < 1000)) return;
+    addSample(x, y, z, g, Math.max(peak, g), hitMs);
 }
 
 // Throws away garbled readings. The total has to match X, Y and Z,
@@ -102,21 +108,26 @@ function isValidReading(x, y, z, g) {
     return Math.abs(expected - g) <= 0.05 * expected + 0.1;
 }
 
-// Bluetooth readings come as one small packet of 2-byte numbers in hundredths of a g:
-//   11 bytes: 2, then X, Y, Z, total (averages) and peak   (current sketch)
-//    9 bytes: 1, then X, Y, Z and total                    (earlier sketch)
+// Bluetooth readings come as one small packet of 2-byte numbers in hundredths:
+//   13 bytes: 3, then X, Y, Z, total (averages), peak and hit length in ms   (current sketch)
+//   11 bytes: 2, then X, Y, Z, total and peak                               (earlier sketch)
+//    9 bytes: 1, then X, Y, Z and total                                     (earlier sketch)
 // Anything else is text (a message, or an older sketch sending text lines).
 const bleDecoder = new TextDecoder();
 
 function handleBluetoothPacket(view) {
     const marker = view.byteLength > 0 ? view.getUint8(0) : 0;
-    if ((view.byteLength === 11 && marker === 2) || (view.byteLength === 9 && marker === 1)) {
+    if ((view.byteLength === 13 && marker === 3) || (view.byteLength === 11 && marker === 2) ||
+        (view.byteLength === 9 && marker === 1)) {
         const x = view.getInt16(1, true) / 100;
         const y = view.getInt16(3, true) / 100;
         const z = view.getInt16(5, true) / 100;
         const g = view.getInt16(7, true) / 100;
-        const peak = marker === 2 ? view.getInt16(9, true) / 100 : g;
-        if (isValidReading(x, y, z, g) && peak >= 0) addSample(x, y, z, g, Math.max(peak, g));
+        const peak = marker >= 2 ? view.getInt16(9, true) / 100 : g;
+        const hitMs = marker === 3 ? view.getInt16(11, true) / 100 : null;
+        if (isValidReading(x, y, z, g) && peak >= 0 && (hitMs === null || hitMs >= 0)) {
+            addSample(x, y, z, g, Math.max(peak, g), hitMs);
+        }
         return;
     }
     handleText(bleDecoder.decode(view));
@@ -131,7 +142,8 @@ function showSensorMessage(line) {
 // g is the steady (average) force, shown as "Right now".
 // peak is the strongest single reading, used for the chart and for impacts,
 // so a short hit is never averaged away.
-function addSample(x, y, z, g, peak = g) {
+// hitMs is how long the hit lasted (null if the sketch doesn't send it).
+function addSample(x, y, z, g, peak = g, hitMs = null) {
     const t = performance.now();
     lastDataTime = t;
     latest = { x, y, z, g };
@@ -141,21 +153,36 @@ function addSample(x, y, z, g, peak = g) {
     // Impact detection: start when force passes WARN_G, keep the highest value,
     // finish once force has stayed below WARN_G for IMPACT_END_MS.
     if (peak >= WARN_G) {
-        if (!currentImpact) currentImpact = { start: Date.now(), peak, lastAbove: t };
+        if (!currentImpact) currentImpact = { start: Date.now(), peak, lastAbove: t, hitMs: null };
         currentImpact.peak = Math.max(currentImpact.peak, peak);
         currentImpact.lastAbove = t;
+    }
+    if (currentImpact && hitMs !== null) {
+        currentImpact.hitMs = Math.max(currentImpact.hitMs || 0, hitMs);
     }
     needsRedraw = true;
 }
 
 function checkImpactFinished() {
     if (currentImpact && performance.now() - currentImpact.lastAbove > IMPACT_END_MS) {
-        const impact = {
-            time: currentImpact.start,
-            peak: Math.round(currentImpact.peak * 10) / 10,
-            level: currentImpact.peak >= DANGER_G ? "danger" : "warn",
-        };
+        const hit = currentImpact;
         currentImpact = null;
+        const peakRounded = Math.round(hit.peak * 10) / 10;
+
+        // Too short to be a head impact (like tapping the sensor on a table): ignore it.
+        if (hit.hitMs !== null && hit.hitMs < MIN_HIT_MS) {
+            el.lastMessage.hidden = false;
+            el.lastMessage.textContent = `Ignored a ${peakRounded} g tap at ${formatTime(hit.start)}. ` +
+                `It lasted ${formatMs(hit.hitMs)}, too short to be a head impact.`;
+            return;
+        }
+
+        const impact = {
+            time: hit.start,
+            peak: peakRounded,
+            level: hit.peak >= DANGER_G ? "danger" : "warn",
+            hitMs: hit.hitMs,
+        };
         impacts.unshift(impact);
         // Demo hits show up while the demo runs but aren't saved to the real history.
         if (connection && connection.type === "demo") impact.demo = true;
@@ -185,17 +212,17 @@ function renderStatus() {
         const when = formatTime(activeAlert.time);
         if (activeAlert.level === "danger") {
             setStatus("danger", "Stop skiing",
-                `${activeAlert.peak} g hit at ${when}. High chance of concussion. ` +
+                `${activeAlert.peak} g hit${lasting(activeAlert)} at ${when}. High chance of concussion. ` +
                 "Tell someone and get checked before you ride again.");
         } else {
             setStatus("warn", "Hard impact",
-                `${activeAlert.peak} g hit at ${when}. Could cause a concussion. ` +
+                `${activeAlert.peak} g hit${lasting(activeAlert)} at ${when}. Could cause a concussion. ` +
                 "Take a break and watch for headache, dizziness or confusion.");
         }
         return;
     }
     if (!connection) {
-        setStatus("off", "Not monitoring", "Connect the sensor to start");
+        setStatus("off", "Not monitoring", "Connect the helmet to start.");
         return;
     }
     if (!latest) {
@@ -303,7 +330,7 @@ function renderLog() {
     for (const imp of impacts) {
         const tr = document.createElement("tr");
         const label = imp.level === "danger" ? "Severe impact" : "Hard impact";
-        tr.innerHTML = `<td>${formatDateTime(imp.time)}</td><td class="num">${imp.peak.toFixed(1)} g</td>` +
+        tr.innerHTML = `<td>${formatDateTime(imp.time)}</td><td class="num">${imp.peak.toFixed(1)} g${imp.hitMs != null ? ", " + formatMs(imp.hitMs) : ""}</td>` +
             `<td><svg class="row-shape"><use href="#shape-${imp.level}"/></svg>${label}</td>`;
         el.logBody.appendChild(tr);
     }
@@ -317,6 +344,13 @@ function loadImpacts() {
 function saveImpacts() {
     try { localStorage.setItem("snowpact-impacts", JSON.stringify(impacts.filter((i) => !i.demo).slice(0, 200))); }
     catch { /* storage not available, history just won't be saved */ }
+}
+
+function formatMs(ms) {
+    return (Math.round(ms * 10) / 10) + " ms";
+}
+function lasting(impact) {
+    return impact.hitMs != null ? " lasting " + formatMs(impact.hitMs) : "";
 }
 
 function formatTime(ms) {
@@ -378,7 +412,7 @@ async function connectBluetooth() {
 
         let open = true;
         device.addEventListener("gattserverdisconnected", () => {
-            if (open) endConnection("Bluetooth connection lost. Check if the sensor on and nearby");
+            if (open) endConnection("Bluetooth connection lost. Is the helmet on and nearby?");
         });
         startConnection("ble", "Connected to " + (device.name || "sensor") + " over Bluetooth", async () => {
             open = false;
@@ -392,21 +426,27 @@ async function connectBluetooth() {
 }
 
 function connectDemo() {
-    // Fake sensor: about 1 g of normal movement, with an impact every ~6 seconds.
+    // Fake sensor: about 1 g of normal movement, and every ~6 seconds either
+    // a real impact (lasting 6-14 ms) or a quick tap (1 ms, which gets ignored).
     let nextImpact = performance.now() + 3000;
     let impactSamples = [];
     const timer = setInterval(() => {
         const now = performance.now();
         if (now > nextImpact) {
             const peak = 50 + Math.random() * 80; // 50 to 130 g
-            impactSamples = [peak * 0.4, peak, peak * 0.6, peak * 0.2];
+            const hitMs = Math.random() < 0.35 ? 1 : 6 + Math.random() * 8;
+            impactSamples = hitMs > 2
+                ? [[peak * 0.6, hitMs * 0.5], [peak, hitMs], [peak * 0.3, hitMs]]
+                : [[peak, hitMs]];
             nextImpact = now + 5000 + Math.random() * 3000;
         }
-        let g = impactSamples.length ? impactSamples.shift() : 1 + (Math.random() - 0.5) * 0.6;
-        const x = (Math.random() - 0.5) * 0.3 * g, y = (Math.random() - 0.5) * 0.3 * g;
+        const g = 1 + (Math.random() - 0.5) * 0.1;
+        const x = (Math.random() - 0.5) * 0.1, y = (Math.random() - 0.5) * 0.1;
         const z = Math.sqrt(Math.max(g * g - x * x - y * y, 0));
-        handleLine(`${x.toFixed(2)}  ${y.toFixed(2)}  ${z.toFixed(2)}  total: ${g.toFixed(2)}`);
-    }, 20);
+        const [peak, hitMs] = impactSamples.length ? impactSamples.shift() : [g + Math.random(), 0];
+        handleLine(`${x.toFixed(2)}  ${y.toFixed(2)}  ${z.toFixed(2)}  total: ${g.toFixed(2)}` +
+            `  peak: ${peak.toFixed(2)}  time: ${hitMs.toFixed(2)}`);
+    }, 50);
     startConnection("demo", "Demo data, no sensor", async () => clearInterval(timer));
 }
 
