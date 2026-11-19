@@ -11,7 +11,7 @@ const IMPACT_END_MS = 150;  // an impact ends once force stays under WARN_G this
 const CHART_SECONDS = 10;   // how much history the chart shows
 const STALE_MS = 3000;      // warn if no data arrives for this long
 const BAUD_RATE = 115200;   // must match Serial.begin() in the Arduino code
-const APP_VERSION = "5";    // shown at the bottom of the page, so you can tell when Vercel has updated
+const APP_VERSION = "6";    // shown at the bottom of the page, so you can tell when Vercel has updated
 
 // Bluetooth: "Nordic UART" service, the same UUIDs used in snowpact_ble.ino
 const BLE_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
@@ -95,21 +95,22 @@ function handleLine(line) {
     const g = parseFloat(nums[3]);
     const peak = nums.length >= 5 ? parseFloat(nums[4]) : g;
     const hitMs = nums.length === 6 ? parseFloat(nums[5]) : null;
-    if (!isValidReading(x, y, z, g) || !(peak >= 0 && peak <= 400)) return;
+    if (!isValidReading(x, y, z, g) || !(peak >= 0 && peak <= 700)) return;
     if (hitMs !== null && !(hitMs >= 0 && hitMs < 1000)) return;
     addSample(x, y, z, g, Math.max(peak, g), hitMs);
 }
 
 // Throws away garbled readings. The total has to match X, Y and Z,
-// and nothing can be bigger than the sensor can measure.
+// and nothing can be bigger than the sensor can measure (about 690 g total at +/- 400 g).
 function isValidReading(x, y, z, g) {
-    if ([x, y, z, g].some((v) => Number.isNaN(v) || Math.abs(v) > 400)) return false;
+    if ([x, y, z, g].some((v) => Number.isNaN(v) || Math.abs(v) > 700)) return false;
     const expected = Math.sqrt(x * x + y * y + z * z);
     return Math.abs(expected - g) <= 0.05 * expected + 0.1;
 }
 
 // Bluetooth readings come as one small packet of 2-byte numbers in hundredths:
-//   13 bytes: 3, then X, Y, Z, total (averages), peak and hit length in ms   (current sketch)
+//   13 bytes: 4, same as below but peak is in tenths of a g, so it isn't capped at 327.7 (current sketch)
+//   13 bytes: 3, then X, Y, Z, total (averages), peak and hit length in ms   (earlier sketch)
 //   11 bytes: 2, then X, Y, Z, total and peak                               (earlier sketch)
 //    9 bytes: 1, then X, Y, Z and total                                     (earlier sketch)
 // Anything else is text (a message, or an older sketch sending text lines).
@@ -117,14 +118,15 @@ const bleDecoder = new TextDecoder();
 
 function handleBluetoothPacket(view) {
     const marker = view.byteLength > 0 ? view.getUint8(0) : 0;
-    if ((view.byteLength === 13 && marker === 3) || (view.byteLength === 11 && marker === 2) ||
+    if ((view.byteLength === 13 && (marker === 3 || marker === 4)) || (view.byteLength === 11 && marker === 2) ||
         (view.byteLength === 9 && marker === 1)) {
         const x = view.getInt16(1, true) / 100;
         const y = view.getInt16(3, true) / 100;
         const z = view.getInt16(5, true) / 100;
         const g = view.getInt16(7, true) / 100;
-        const peak = marker >= 2 ? view.getInt16(9, true) / 100 : g;
-        const hitMs = marker === 3 ? view.getInt16(11, true) / 100 : null;
+        const peak = marker === 4 ? view.getInt16(9, true) / 10
+                   : marker >= 2 ? view.getInt16(9, true) / 100 : g;
+        const hitMs = marker >= 3 ? view.getInt16(11, true) / 100 : null;
         if (isValidReading(x, y, z, g) && peak >= 0 && (hitMs === null || hitMs >= 0)) {
             addSample(x, y, z, g, Math.max(peak, g), hitMs);
         }
